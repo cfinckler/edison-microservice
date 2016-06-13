@@ -13,7 +13,6 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
-import java.net.URI;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
@@ -48,34 +47,31 @@ public class JobService {
     @Autowired
     private GaugeService gaugeService;
     @Autowired(required = false)
-    private Set<JobMutexGroup> mutexGroups;
-    @Autowired(required = false)
     private List<JobRunnable> jobRunnables = emptyList();
+    @Autowired
+    private JobMutexHandler jobMutexHandler;
 
 
     public JobService() {
     }
 
     JobService(final JobRepository repository,
-               final Set<JobMutexGroup> mutexGroups,
                final List<JobRunnable> jobRunnables,
                final GaugeService gaugeService,
                final ScheduledExecutorService executor,
-               final ApplicationEventPublisher applicationEventPublisher) {
+               final ApplicationEventPublisher applicationEventPublisher,
+               final JobMutexHandler jobMutexHandler) {
         this.repository = repository;
-        this.mutexGroups = mutexGroups;
         this.jobRunnables = jobRunnables;
         this.gaugeService = gaugeService;
         this.executor = executor;
         this.applicationEventPublisher = applicationEventPublisher;
+        this.jobMutexHandler = jobMutexHandler;
     }
 
     @PostConstruct
     public void postConstruct() {
         LOG.info("Found {} JobRunnables: {}", +jobRunnables.size(), jobRunnables.stream().map(j -> j.getJobDefinition().jobType()).collect(Collectors.toList()));
-        if (mutexGroups == null) {
-            this.mutexGroups = emptySet();
-        }
     }
 
     /**
@@ -100,9 +96,7 @@ public class JobService {
 
     private Optional<String> startJob(String jobType, boolean async) {
         final JobRunnable jobRunnable = findJobRunnable(jobType);
-        // TODO: use some kind of database lock so we can prevent race conditions
-        final Set<String> mutexJobTypes = mutexJobTypesFor(jobType);
-        if (!isBlockedBy(mutexJobTypes)) {
+        if (jobMutexHandler.isJobStartable(jobRunnable.getJobDefinition().jobType())) {
             if (async) {
                 return Optional.of(startAsync(metered(jobRunnable)));
             } else {
@@ -171,7 +165,8 @@ public class JobService {
                 jobId,
                 jobType,
                 executor,
-                newJobEventPublisher(applicationEventPublisher, jobRunnable, jobId)
+                newJobEventPublisher(applicationEventPublisher, jobRunnable, jobId),
+                jobMutexHandler
         );
     }
 
@@ -200,21 +195,4 @@ public class JobService {
         return randomUUID().toString();
     }
 
-    private boolean isBlockedBy(final Set<String> mutexJobs) {
-        return mutexJobs.stream()
-                .map(repository::findRunningJobByType)
-                .filter(Optional::isPresent)
-                .count() > 0;
-    }
-
-    private Set<String> mutexJobTypesFor(final String jobType) {
-        final Set<String> result = new HashSet<>();
-        result.add(jobType);
-        this.mutexGroups
-                .stream()
-                .map(JobMutexGroup::getJobTypes)
-                .filter(g->g.contains(jobType))
-                .forEach(result::addAll);
-        return result;
-    }
 }

@@ -24,7 +24,6 @@ import static java.time.Clock.fixed;
 import static java.time.Instant.now;
 import static java.time.ZoneId.systemDefault;
 import static java.util.Arrays.asList;
-import static java.util.Collections.emptySet;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
@@ -37,12 +36,14 @@ public class JobServiceTest {
 
     private ScheduledExecutorService executorService;
     private ApplicationEventPublisher applicationEventPublisher;
+    private JobMutexHandler jobMutexHandler;
 
     @BeforeMethod
     @SuppressWarnings("unchecked")
     public void setUp() throws Exception {
         executorService = mock(ScheduledExecutorService.class);
         applicationEventPublisher = mock(ApplicationEventPublisher.class);
+        jobMutexHandler = new JobMutexHandler(new HashSet<>(), new JobRunSemaphoreProviderInMemImpl());
         doAnswer(new RunImmediately()).when(executorService).execute(any(Runnable.class));
 
         when(executorService.scheduleAtFixedRate(any(Runnable.class), anyLong(), anyLong(), any(TimeUnit.class))).thenReturn(mock(ScheduledFuture.class));
@@ -53,7 +54,7 @@ public class JobServiceTest {
         // given:
         JobRunnable jobRunnable = mock(JobRunnable.class);
         when(jobRunnable.getJobDefinition()).thenReturn(someJobDefinition("BAR"));
-        JobService jobService = new JobService(someJobRepository(), emptySet(), asList(jobRunnable), mock(GaugeService.class), executorService, applicationEventPublisher);
+        JobService jobService = new JobService(someJobRepository(), asList(jobRunnable), mock(GaugeService.class), executorService, applicationEventPublisher, jobMutexHandler);
         // when:
         Optional<String> jobId = jobService.startAsyncJob("BAR");
         // then:
@@ -75,11 +76,11 @@ public class JobServiceTest {
         InMemJobRepository jobRepository = new InMemJobRepository();
         JobService jobService = new JobService(
                 jobRepository,
-                emptySet(),
                 asList(jobRunnable),
                 mock(GaugeService.class),
                 executorService,
-                applicationEventPublisher
+                applicationEventPublisher,
+                jobMutexHandler
         );
 
         // when:
@@ -97,11 +98,11 @@ public class JobServiceTest {
         InMemJobRepository jobRepository = new InMemJobRepository();
         JobService jobService = new JobService(
                 jobRepository,
-                emptySet(),
                 asList(jobRunnable),
                 mock(GaugeService.class),
                 executorService,
-                applicationEventPublisher
+                applicationEventPublisher,
+                jobMutexHandler
         );
 
         // when:
@@ -119,13 +120,16 @@ public class JobServiceTest {
         JobRunnable jobRunnable = mock(JobRunnable.class);
         when(jobRunnable.getJobDefinition()).thenReturn(someJobDefinition("BAR"));
         InMemJobRepository jobRepository = new InMemJobRepository();
+        JobRunSemaphoreProvider jobRunSemaphoreProvider = new JobRunSemaphoreProviderInMemImpl();
+        jobRunSemaphoreProvider.getRunSemaphoreForJobType("BAR");
+        JobMutexHandler jobMutexHandler = new JobMutexHandler(new HashSet<>(), jobRunSemaphoreProvider);
         JobService jobService = new JobService(
                 jobRepository,
-                emptySet(),
                 asList(jobRunnable),
                 mock(GaugeService.class),
                 executorService,
-                applicationEventPublisher
+                applicationEventPublisher,
+                jobMutexHandler
         );
         String alreadyRunningJob = "barIsRunning";
         jobRepository.createOrUpdate(newJobInfo(alreadyRunningJob, "BAR", clock, "localhost"));
@@ -142,15 +146,19 @@ public class JobServiceTest {
         InMemJobRepository jobRepository = new InMemJobRepository();
         JobRunnable jobRunnable = mock(JobRunnable.class);
         when(jobRunnable.getJobDefinition()).thenReturn(someJobDefinition("FOO"));
+        JobRunSemaphoreProvider jobRunSemaphoreProvider = new JobRunSemaphoreProviderInMemImpl();
+        jobRunSemaphoreProvider.getRunSemaphoreForJobType("BAR");
+        JobMutexHandler jobMutexHandler = new JobMutexHandler(new HashSet<>(), jobRunSemaphoreProvider);
         String alreadyRunningJob ="barIsRunning";
         jobRepository.createOrUpdate(newJobInfo(alreadyRunningJob, "BAR", clock, "localhost"));
+
         JobService jobService = new JobService(
                 jobRepository,
-                emptySet(),
                 asList(jobRunnable),
                 mock(GaugeService.class),
                 executorService,
-                applicationEventPublisher
+                applicationEventPublisher,
+                jobMutexHandler
         );
 
         // when:
@@ -166,16 +174,17 @@ public class JobServiceTest {
         InMemJobRepository jobRepository = new InMemJobRepository();
         JobRunnable jobRunnable = mock(JobRunnable.class);
         when(jobRunnable.getJobDefinition()).thenReturn(someJobDefinition("FOO"));
-        String alreadyRunningJob = "/internal/jobs/barIsRunning";
-        jobRepository.createOrUpdate(newJobInfo(alreadyRunningJob, "BAR", clock, "localhost"));
+        JobRunSemaphoreProvider jobRunSemaphoreProvider = new JobRunSemaphoreProviderInMemImpl();
+        jobRunSemaphoreProvider.getRunSemaphoreForJobType("BAR");
+        JobMutexHandler jobMutexHandler = new JobMutexHandler(new HashSet<>(asList(new JobMutexGroup("Product Import", "FOO", "BAR"))), jobRunSemaphoreProvider);
         JobService jobService = new JobService(
                 jobRepository,
-                new HashSet<>(asList(new JobMutexGroup("Product Import", "FOO", "BAR"))),
                 asList(jobRunnable),
                 mock(GaugeService.class),
                 executorService,
-                applicationEventPublisher
-        );
+                applicationEventPublisher,
+                jobMutexHandler
+                );
 
         // when:
         Optional<String> jobUri = jobService.startAsyncJob("FOO");
@@ -191,7 +200,7 @@ public class JobServiceTest {
 
         GaugeService mock = mock(GaugeService.class);
         JobRepository repository = someJobRepository(Optional.empty());
-        JobService jobService = new JobService(repository, emptySet(), asList(jobRunnable), mock, executorService, applicationEventPublisher);
+        JobService jobService = new JobService(repository, asList(jobRunnable), mock, executorService, applicationEventPublisher, jobMutexHandler);
         // when:
         jobService.startAsyncJob("BAR");
         // then:

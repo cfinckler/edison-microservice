@@ -1,11 +1,12 @@
 package de.otto.edison.jobs.service;
 
+import de.otto.edison.jobs.definition.DefaultJobDefinition;
+import de.otto.edison.jobs.definition.JobDefinition;
 import de.otto.edison.jobs.eventbus.JobEventPublisher;
 import org.mockito.ArgumentCaptor;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
-import java.net.URI;
 import java.net.URISyntaxException;
 import java.time.Clock;
 import java.time.Instant;
@@ -22,7 +23,6 @@ import static de.otto.edison.jobs.eventbus.events.StateChangeEvent.State.START;
 import static de.otto.edison.jobs.eventbus.events.StateChangeEvent.State.STOP;
 import static de.otto.edison.jobs.service.JobRunner.PING_PERIOD;
 import static de.otto.edison.jobs.service.JobRunner.newJobRunner;
-import static java.net.URI.create;
 import static java.time.Clock.fixed;
 import static java.time.Duration.ofSeconds;
 import static java.time.ZoneId.systemDefault;
@@ -33,16 +33,18 @@ import static org.mockito.Mockito.*;
 
 public class JobRunnerTest {
 
-    private Clock clock;
     private ScheduledExecutorService executor;
     private ScheduledFuture scheduledJob;
     private JobEventPublisher jobEventPublisher;
+    private JobMutexHandler jobMutexHandler;
 
     @BeforeMethod
     public void setUp() throws Exception {
-        clock = fixed(Instant.now(), systemDefault());
         executor = mock(ScheduledExecutorService.class);
         jobEventPublisher = mock(JobEventPublisher.class);
+        jobMutexHandler = mock(JobMutexHandler.class);
+
+        when(jobMutexHandler.isJobStartable(anyString())).thenReturn(true);
 
         scheduledJob = mock(ScheduledFuture.class);
         doReturn(scheduledJob)
@@ -52,7 +54,7 @@ public class JobRunnerTest {
     @Test
     public void shouldExecuteJob() {
         // given
-        JobRunner jobRunner = newJobRunner("42", "TYPE", executor, jobEventPublisher);
+        JobRunner jobRunner = newJobRunner("42", "TYPE", executor, jobEventPublisher, jobMutexHandler);
         JobRunnable jobRunnable = mock(JobRunnable.class);
         when(jobRunnable.getJobDefinition()).thenReturn(fixedDelayJobDefinition("TYPE", "", "", ofSeconds(2), 0, empty()));
 
@@ -70,7 +72,8 @@ public class JobRunnerTest {
                 "42",
                 "NAME",
                 executor,
-                jobEventPublisher);
+                jobEventPublisher,
+                jobMutexHandler);
         JobRunnable jobRunnable = mock(JobRunnable.class);
         when(jobRunnable.getJobDefinition()).thenReturn(fixedDelayJobDefinition("TYPE", "", "", ofSeconds(2), 0, empty()));
         doThrow(new RuntimeException("some error")).when(jobRunnable).execute(jobEventPublisher);
@@ -89,7 +92,8 @@ public class JobRunnerTest {
                 "42",
                 "NAME",
                 executor,
-                jobEventPublisher);
+                jobEventPublisher,
+                jobMutexHandler);
 
         JobRunnable jobRunnable = mock(JobRunnable.class);
 
@@ -115,10 +119,11 @@ public class JobRunnerTest {
                 "42",
                 "NAME",
                 executor,
-                jobEventPublisher);
+                jobEventPublisher,
+                jobMutexHandler);
 
         // when
-        jobRunner.start(mock(JobRunnable.class));
+        jobRunner.start(getMockedRunnable());
 
         //then
         ArgumentCaptor<Runnable> pingRunnableArgumentCaptor = ArgumentCaptor.forClass(Runnable.class);
@@ -136,12 +141,21 @@ public class JobRunnerTest {
                 "42",
                 "NAME",
                 executor,
-                jobEventPublisher);
+                jobEventPublisher,
+                jobMutexHandler);
 
         // when
-        jobRunner.start(mock(JobRunnable.class));
+        jobRunner.start(getMockedRunnable());
 
         //then
         verify(scheduledJob).cancel(false);
+    }
+
+    private JobRunnable getMockedRunnable() {
+        final JobRunnable jobRunnable = mock(JobRunnable.class);
+        JobDefinition jobDefinition = mock(JobDefinition.class);
+        when(jobDefinition.jobType()).thenReturn("TYPE");
+        when(jobRunnable.getJobDefinition()).thenReturn(jobDefinition);
+        return jobRunnable;
     }
 }
